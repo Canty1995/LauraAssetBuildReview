@@ -2,6 +2,29 @@
 
 A **rigid and specific** portable Windows WPF application that updates Excel files by matching EAN values from a main file against two reference files, setting dropdown status values in **Column G** based on matches.
 
+## 🚀 Quick Start - How to Use
+
+### Step 1: Prepare Your Files
+- **Main File**: Must have EANs in **Column C starting at Row 3**, and a dropdown in **Column G with 3 options**
+- **Reference File A**: EANs in **Column C** (any row)
+- **Reference File B**: EANs in **Column C** (any row)
+
+### Step 2: Run the Application
+1. Double-click `LauraAssetBuildReview.exe`
+2. Click **"Browse..."** and select your **Main File**
+3. Click **"Browse..."** and select **Reference File A**
+4. Click **"Browse..."** and select **Reference File B**
+5. Click **"Run"**
+
+### Step 3: Check Results
+- The main file is **automatically updated** with status values in Column G
+- Check the log panel for processing details
+- A log file is saved next to your main file
+
+**That's it!** The program matches EANs and fills in Column G automatically.
+
+---
+
 ## ⚠️ IMPORTANT: Rigid Column Requirements
 
 This application is **very specific** about Excel file structure. Files must match these exact requirements or the application will fail:
