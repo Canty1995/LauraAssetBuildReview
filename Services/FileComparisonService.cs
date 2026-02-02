@@ -37,11 +37,25 @@ public class FileComparisonService
     /// <param name="file2Path">Path to the second file (e.g., program-generated)</param>
     /// <param name="startRow">Starting row to compare (default: 3)</param>
     /// <returns>Comparison result with details of matches and mismatches</returns>
+    [Obsolete("Use CompareColumn with column number parameter")]
     public FileComparisonResult CompareColumnG(string file1Path, string file2Path, int startRow = 3)
+    {
+        return CompareColumn(file1Path, file2Path, startRow, 7);
+    }
+
+    /// <summary>
+    /// Compares values in a specified column between two Excel files.
+    /// </summary>
+    /// <param name="file1Path">Path to the first file (e.g., manually populated)</param>
+    /// <param name="file2Path">Path to the second file (e.g., program-generated)</param>
+    /// <param name="startRow">Starting row to compare</param>
+    /// <param name="columnNumber">Column number (1-based) to compare</param>
+    /// <returns>Comparison result with details of matches and mismatches</returns>
+    public FileComparisonResult CompareColumn(string file1Path, string file2Path, int startRow, int columnNumber)
     {
         var result = new FileComparisonResult();
 
-        // Read column G from both files
+        // Read column values from both files
         Dictionary<int, string> file1Values;
         Dictionary<int, string> file2Values;
 
@@ -52,7 +66,7 @@ public class FileComparisonService
             {
                 throw new InvalidOperationException($"File 1 does not have a first worksheet: {file1Path}");
             }
-            file1Values = ReadColumnG(worksheet1, startRow);
+            file1Values = ReadColumn(worksheet1, startRow, columnNumber);
         }
 
         using (var workbook2 = new XLWorkbook(file2Path))
@@ -62,7 +76,7 @@ public class FileComparisonService
             {
                 throw new InvalidOperationException($"File 2 does not have a first worksheet: {file2Path}");
             }
-            file2Values = ReadColumnG(worksheet2, startRow);
+            file2Values = ReadColumn(worksheet2, startRow, columnNumber);
         }
 
         // Get all unique row numbers
@@ -129,14 +143,23 @@ public class FileComparisonService
     /// <summary>
     /// Reads all values from column G starting at the specified row.
     /// </summary>
+    [Obsolete("Use ReadColumn with column number parameter")]
     private Dictionary<int, string> ReadColumnG(IXLWorksheet worksheet, int startRow)
+    {
+        return ReadColumn(worksheet, startRow, 7);
+    }
+
+    /// <summary>
+    /// Reads all values from a specified column starting at the specified row.
+    /// </summary>
+    private Dictionary<int, string> ReadColumn(IXLWorksheet worksheet, int startRow, int columnNumber)
     {
         var values = new Dictionary<int, string>();
         var lastRow = worksheet.LastRowUsed()?.RowNumber() ?? startRow - 1;
 
         for (int row = startRow; row <= lastRow; row++)
         {
-            var cell = worksheet.Cell(row, 7); // Column G
+            var cell = worksheet.Cell(row, columnNumber);
             if (!cell.IsEmpty())
             {
                 var value = cell.GetString();

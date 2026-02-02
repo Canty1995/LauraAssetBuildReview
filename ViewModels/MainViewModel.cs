@@ -17,6 +17,8 @@ public partial class MainViewModel : ObservableObject
     private readonly MatchingService _matchingService;
     private readonly LoggingService _loggingService;
     private readonly FileComparisonService _fileComparisonService;
+    private readonly PowerPointReader _powerPointReader;
+    private readonly ResultWriter _resultWriter;
 
     [ObservableProperty]
     private string _mainFilePath = string.Empty;
@@ -39,7 +41,24 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string _statusMessage = "Ready";
 
+    // Configuration properties
+    [ObservableProperty]
+    private ProcessingConfiguration _config;
+
+    [ObservableProperty]
+    private bool _useWorksheetIndex = true;
+
+    [ObservableProperty]
+    private bool _showLegacyReferenceFiles = false;
+
+    [ObservableProperty]
+    private string _expectedDropdownCountText = string.Empty;
+
     public ObservableCollection<string> LogMessages { get; } = new();
+    public ObservableCollection<ReferenceFileViewModel> ReferenceFileConfigs { get; } = new();
+    public ObservableCollection<ManualMappingViewModel> ManualMappings { get; } = new();
+
+    private readonly ConfigurationService _configService;
 
     public MainViewModel()
     {
@@ -48,6 +67,24 @@ public partial class MainViewModel : ObservableObject
         _matchingService = new MatchingService();
         _loggingService = new LoggingService();
         _fileComparisonService = new FileComparisonService(_excelReader);
+        _powerPointReader = new PowerPointReader();
+        _resultWriter = new ResultWriter();
+        _configService = new ConfigurationService();
+        
+        // Initialize with default configuration
+        Config = _configService.GetDefaultConfiguration();
+        
+        // Initialize with 2 reference files for backward compatibility
+        ReferenceFileConfigs.Add(new ReferenceFileViewModel("Reference File A", 1));
+        ReferenceFileConfigs.Add(new ReferenceFileViewModel("Reference File B", 2));
+        
+        // Try to load saved configuration
+        var savedConfig = _configService.LoadConfiguration();
+        if (savedConfig != null)
+        {
+            Config = savedConfig;
+            UpdateReferenceFilesFromConfig();
+        }
     }
 
     [RelayCommand]
@@ -55,8 +92,8 @@ public partial class MainViewModel : ObservableObject
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
-            Filter = "Excel Files (*.xlsx)|*.xlsx|All Files (*.*)|*.*",
-            Title = "Select Main Excel File"
+            Filter = "PowerPoint Files (*.pptx)|*.pptx|Excel Files (*.xlsx)|*.xlsx|All Files (*.*)|*.*",
+            Title = "Select Main File (PowerPoint or Excel)"
         };
 
         if (dialog.ShowDialog() == true)
@@ -190,7 +227,7 @@ public partial class MainViewModel : ObservableObject
             // Run comparison
             await Task.Run(() =>
             {
-                var result = _fileComparisonService.CompareColumnG(ComparisonFile1Path, ComparisonFile2Path, 3);
+                var result = _fileComparisonService.CompareColumn(ComparisonFile1Path, ComparisonFile2Path, 3, 7);
 
                 _loggingService.Log($"=== Comparison Results ===");
                 _loggingService.Log($"Total rows compared: {result.TotalRowsCompared}");
@@ -328,7 +365,7 @@ public partial class MainViewModel : ObservableObject
     {
         var result = new ValidationResult { IsValid = true };
 
-        // Validate file paths
+        // Validate main file path
         if (string.IsNullOrWhiteSpace(MainFilePath))
         {
             result.IsValid = false;
@@ -339,42 +376,87 @@ public partial class MainViewModel : ObservableObject
             result.IsValid = false;
             result.Errors.Add($"Main file does not exist: {MainFilePath}");
         }
-        else if (!MainFilePath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+        else if (!MainFilePath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) && 
+                 !MainFilePath.EndsWith(".pptx", StringComparison.OrdinalIgnoreCase))
         {
             result.IsValid = false;
-            result.Errors.Add("Main file must be an .xlsx file.");
+            result.Errors.Add("Main file must be an .xlsx or .pptx file.");
         }
 
-        if (string.IsNullOrWhiteSpace(ReferenceAPath))
+        // Validate reference files - check both new system and legacy
+        var hasValidReferenceFiles = false;
+        
+        // Check new flexible system
+        foreach (var refFileVm in ReferenceFileConfigs)
         {
-            result.IsValid = false;
-            result.Errors.Add("Reference file A path is required.");
-        }
-        else if (!File.Exists(ReferenceAPath))
-        {
-            result.IsValid = false;
-            result.Errors.Add($"Reference file A does not exist: {ReferenceAPath}");
-        }
-        else if (!ReferenceAPath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
-        {
-            result.IsValid = false;
-            result.Errors.Add("Reference file A must be an .xlsx file.");
+            var filePath = refFileVm.FilePath;
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                // Try legacy paths for backward compatibility
+                if (refFileVm.Config.Priority == 1 && !string.IsNullOrWhiteSpace(ReferenceAPath))
+                {
+                    filePath = ReferenceAPath;
+                }
+                else if (refFileVm.Config.Priority == 2 && !string.IsNullOrWhiteSpace(ReferenceBPath))
+                {
+                    filePath = ReferenceBPath;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(filePath))
+            {
+                if (!File.Exists(filePath))
+                {
+                    result.IsValid = false;
+                    result.Errors.Add($"{refFileVm.DisplayName} does not exist: {filePath}");
+                }
+                else if (!filePath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) && 
+                         !filePath.EndsWith(".pptx", StringComparison.OrdinalIgnoreCase))
+                {
+                    result.IsValid = false;
+                    result.Errors.Add($"{refFileVm.DisplayName} must be an .xlsx or .pptx file.");
+                }
+                else
+                {
+                    hasValidReferenceFiles = true;
+                }
+            }
         }
 
-        if (string.IsNullOrWhiteSpace(ReferenceBPath))
+        // Legacy validation for backward compatibility (only if no valid files in new system)
+        if (!hasValidReferenceFiles)
         {
-            result.IsValid = false;
-            result.Errors.Add("Reference file B path is required.");
-        }
-        else if (!File.Exists(ReferenceBPath))
-        {
-            result.IsValid = false;
-            result.Errors.Add($"Reference file B does not exist: {ReferenceBPath}");
-        }
-        else if (!ReferenceBPath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
-        {
-            result.IsValid = false;
-            result.Errors.Add("Reference file B must be an .xlsx file.");
+            if (string.IsNullOrWhiteSpace(ReferenceAPath))
+            {
+                result.IsValid = false;
+                result.Errors.Add("At least one reference file is required. Please configure reference files in the Configuration section.");
+            }
+            else if (!File.Exists(ReferenceAPath))
+            {
+                result.IsValid = false;
+                result.Errors.Add($"Reference file A does not exist: {ReferenceAPath}");
+            }
+            else if (!ReferenceAPath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+            {
+                result.IsValid = false;
+                result.Errors.Add("Reference file A must be an .xlsx file.");
+            }
+
+            if (string.IsNullOrWhiteSpace(ReferenceBPath))
+            {
+                result.IsValid = false;
+                result.Errors.Add("At least two reference files are required. Please configure reference files in the Configuration section.");
+            }
+            else if (!File.Exists(ReferenceBPath))
+            {
+                result.IsValid = false;
+                result.Errors.Add($"Reference file B does not exist: {ReferenceBPath}");
+            }
+            else if (!ReferenceBPath.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+            {
+                result.IsValid = false;
+                result.Errors.Add("Reference file B must be an .xlsx file.");
+            }
         }
 
         return result;
@@ -382,48 +464,212 @@ public partial class MainViewModel : ObservableObject
 
     private void ProcessFiles()
     {
+        // Sync configuration from UI
+        SyncConfigFromUI();
+
+        // Determine main file type
+        var mainFileExtension = Path.GetExtension(MainFilePath).ToLowerInvariant();
+        var isPowerPoint = mainFileExtension == ".pptx";
+
+        if (isPowerPoint)
+        {
+            // PowerPoint workflow: Extract EANs and create new Excel result file
+            ProcessPowerPointFile();
+        }
+        else
+        {
+            // Excel workflow: Original functionality - read dropdowns, match, write back to file
+            ProcessExcelFile();
+        }
+    }
+
+    private void ProcessPowerPointFile()
+    {
+        // Extract EANs from PowerPoint
+        _loggingService.Log("Extracting EANs from PowerPoint file...");
+        _loggingService.Log("Note: EANs must be exactly 14 digits.");
+        UpdateLogDisplay();
+        
+        // Get selected slides from config (if any)
+        var selectedSlides = new List<int>(); // For now, process all slides
+        // TODO: Add UI to select slides for main PowerPoint file
+        
+        var mainEansSet = _powerPointReader.ReadEansFromPowerPoint(
+            MainFilePath,
+            selectedSlides,
+            Config.MinEanDigits,
+            Config.MaxEanDigits,
+            Config.AllowNonNumericEans);
+        
+        var mainEansList = mainEansSet.ToList();
+        _loggingService.Log($"Found {mainEansList.Count} EANs in PowerPoint file.");
+
+        if (mainEansList.Count == 0)
+        {
+            throw new InvalidOperationException("No EANs found in PowerPoint file.");
+        }
+
+        // Load reference files and create mapping of EAN to file names
+        var eanToFiles = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        
+        // Initialize all EANs with empty list
+        foreach (var ean in mainEansList)
+        {
+            eanToFiles[ean] = new List<string>();
+        }
+
+        // Process reference files from configuration
+        var referenceFiles = GetReferenceFilesFromConfig();
+
+        foreach (var (refFilePath, displayName) in referenceFiles)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(refFilePath);
+            _loggingService.Log($"Loading {displayName}: {fileName}...");
+            UpdateLogDisplay();
+
+            var extension = Path.GetExtension(refFilePath).ToLowerInvariant();
+            HashSet<string> refEans;
+
+            if (extension == ".pptx")
+            {
+                // PowerPoint reference file
+                var refFileVm = ReferenceFileConfigs.FirstOrDefault(r => r.FilePath == refFilePath);
+                var refSelectedSlides = refFileVm?.Config.SelectedSlides ?? new List<int>();
+                
+                refEans = _powerPointReader.ReadEansFromPowerPoint(
+                    refFilePath,
+                    refSelectedSlides,
+                    Config.MinEanDigits,
+                    Config.MaxEanDigits,
+                    Config.AllowNonNumericEans);
+            }
+            else
+            {
+                // Excel reference file
+                using var refWorkbook = new XLWorkbook(refFilePath);
+                var refWorksheet = refWorkbook.Worksheet(1);
+                if (refWorksheet == null)
+                {
+                    _loggingService.Log($"WARNING: {fileName} does not have a first worksheet. Skipping.", LogLevel.Warning);
+                    continue;
+                }
+
+                var refFileVm = ReferenceFileConfigs.FirstOrDefault(r => r.FilePath == refFilePath);
+                var eanColumn = refFileVm != null 
+                    ? ProcessingConfiguration.ColumnLetterToNumber(refFileVm.Config.EanColumn)
+                    : 3;
+                var startRow = refFileVm?.Config.StartRow ?? 1;
+
+                refEans = _excelReader.ReadAllEansFromColumn(
+                    refWorksheet, 
+                    eanColumn, 
+                    startRow, 
+                    Config.MinEanDigits, 
+                    Config.MaxEanDigits, 
+                    Config.AllowNonNumericEans);
+            }
+
+            _loggingService.Log($"Found {refEans.Count} EANs in {fileName}.");
+
+            // Match EANs and add file name to the list
+            foreach (var ean in mainEansList)
+            {
+                if (refEans.Contains(ean))
+                {
+                    if (!eanToFiles[ean].Contains(fileName))
+                    {
+                        eanToFiles[ean].Add(fileName);
+                    }
+                }
+            }
+        }
+
+        // Create result Excel file
+        _loggingService.Log("Creating result Excel file...");
+        UpdateLogDisplay();
+        
+        var outputFileName = Path.GetFileNameWithoutExtension(MainFilePath);
+        var resultPath = _resultWriter.CreateResultFile(mainEansList, eanToFiles, outputFileName);
+        
+        _loggingService.Log($"Result file created: {resultPath}");
+        
+        // Log summary
+        var foundCount = eanToFiles.Values.Count(files => files.Count > 0);
+        var notFoundCount = mainEansList.Count - foundCount;
+        
+        _loggingService.Log($"Processing complete:");
+        _loggingService.Log($"  Total EANs processed: {mainEansList.Count}");
+        _loggingService.Log($"  EANs found in reference files: {foundCount}");
+        _loggingService.Log($"  EANs not found: {notFoundCount}");
+        UpdateLogDisplay();
+    }
+
+    private void ProcessExcelFile()
+    {
         // Load main file
         _loggingService.Log("Loading main file...");
         UpdateLogDisplay();
         using var mainWorkbook = new XLWorkbook(MainFilePath);
-        var mainWorksheet = mainWorkbook.Worksheet(1);
-        if (mainWorksheet == null)
+        
+        // Get worksheet based on configuration
+        IXLWorksheet mainWorksheet;
+        if (!string.IsNullOrWhiteSpace(Config.WorksheetName))
         {
-            throw new InvalidOperationException("Main file does not have a first worksheet.");
+            mainWorksheet = mainWorkbook.Worksheet(Config.WorksheetName);
+            if (mainWorksheet == null)
+            {
+                throw new InvalidOperationException($"Main file does not have a worksheet named '{Config.WorksheetName}'.");
+            }
+        }
+        else
+        {
+            mainWorksheet = mainWorkbook.Worksheet(Config.WorksheetIndex);
+            if (mainWorksheet == null)
+            {
+                throw new InvalidOperationException($"Main file does not have a worksheet at index {Config.WorksheetIndex}.");
+            }
         }
 
-        // Read EANs from main file (starting at row 3)
-        _loggingService.Log("Reading EANs from main file (column C, starting at row 3)...");
-        _loggingService.Log("Note: Only numeric EANs (8-14 digits) will be read. Product names and other text will be skipped.");
+        // Read EANs from main file using configuration
+        var eanColumn = Config.GetEanColumnNumber();
+        _loggingService.Log($"Reading EANs from main file (column {Config.EanColumn}, starting at row {Config.StartRow})...");
+        _loggingService.Log($"EAN validation: {Config.MinEanDigits}-{Config.MaxEanDigits} digits, Allow non-numeric: {Config.AllowNonNumericEans}");
         UpdateLogDisplay();
-        var mainEans = _excelReader.ReadEansFromColumnC(mainWorksheet, 3);
+        var mainEans = _excelReader.ReadEansFromColumn(
+            mainWorksheet, 
+            eanColumn, 
+            Config.StartRow, 
+            Config.MinEanDigits, 
+            Config.MaxEanDigits, 
+            Config.AllowNonNumericEans);
         _loggingService.Log($"Found {mainEans.Count} valid EANs in main file.");
         
         if (mainEans.Count == 0)
         {
-            _loggingService.Log("WARNING: No valid EANs found. Checking if EANs might be in a different column or starting row...", LogLevel.Warning);
+            _loggingService.Log($"WARNING: No valid EANs found. Checking if EANs might be in a different column or starting row...", LogLevel.Warning);
             // Log what we found in the first few rows to help diagnose
-            for (int row = 3; row <= Math.Min(10, mainWorksheet.LastRowUsed()?.RowNumber() ?? 10); row++)
+            for (int row = Config.StartRow; row <= Math.Min(Config.StartRow + 7, mainWorksheet.LastRowUsed()?.RowNumber() ?? Config.StartRow + 7); row++)
             {
-                var cell = mainWorksheet.Cell(row, 3);
+                var cell = mainWorksheet.Cell(row, eanColumn);
                 if (!cell.IsEmpty())
                 {
                     var value = cell.GetString();
-                    _loggingService.Log($"  Row {row}, Column C: '{value}' (Type: {cell.DataType})");
+                    _loggingService.Log($"  Row {row}, Column {Config.EanColumn}: '{value}' (Type: {cell.DataType})");
                 }
             }
         }
 
         if (mainEans.Count == 0)
         {
-            throw new InvalidOperationException("No EANs found in main file column C starting from row 3.");
+            throw new InvalidOperationException($"No EANs found in main file column {Config.EanColumn} starting from row {Config.StartRow}.");
         }
 
         // Read dropdown options from main file
-        _loggingService.Log("Reading dropdown options from main file (column G)...");
+        var dropdownColumn = Config.GetDropdownColumnNumber();
+        _loggingService.Log($"Reading dropdown options from main file (column {Config.DropdownColumn})...");
         UpdateLogDisplay();
         
-        var dropdownOptions = _excelReader.ReadDropdownOptions(mainWorksheet, 7, MainFilePath);
+        var dropdownOptions = _excelReader.ReadDropdownOptions(mainWorksheet, dropdownColumn, MainFilePath);
         
         if (dropdownOptions.Count > 0)
         {
@@ -437,20 +683,20 @@ public partial class MainViewModel : ObservableObject
         if (dropdownOptions.Count == 0)
         {
             // Try to provide more helpful error message
-            var sampleCell = mainWorksheet.Cell(3, 7); // Check row 3, column G
+            var sampleCell = mainWorksheet.Cell(Config.StartRow, dropdownColumn);
             var hasValue = !sampleCell.IsEmpty();
             var sampleValue = hasValue ? sampleCell.GetString() : "(empty)";
             
-            _loggingService.Log($"Column G sample (row 3): {sampleValue}", LogLevel.Warning);
-            _loggingService.Log("Attempting to read all unique values from column G as fallback...", LogLevel.Warning);
+            _loggingService.Log($"Column {Config.DropdownColumn} sample (row {Config.StartRow}): {sampleValue}", LogLevel.Warning);
+            _loggingService.Log("Attempting to read all unique values from dropdown column as fallback...", LogLevel.Warning);
             UpdateLogDisplay();
             
-            // Last resort: read all unique non-empty values from column G
+            // Last resort: read all unique non-empty values from dropdown column
             var allValues = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var lastRow = mainWorksheet.LastRowUsed()?.RowNumber() ?? 1000;
             for (int row = 1; row <= Math.Min(1000, lastRow); row++)
             {
-                var cell = mainWorksheet.Cell(row, 7);
+                var cell = mainWorksheet.Cell(row, dropdownColumn);
                 if (!cell.IsEmpty())
                 {
                     var value = cell.GetString().Trim();
@@ -464,61 +710,179 @@ public partial class MainViewModel : ObservableObject
             if (allValues.Count > 0)
             {
                 dropdownOptions = allValues.OrderBy(v => v).ToList();
-                _loggingService.Log($"Using {dropdownOptions.Count} unique values from column G as dropdown options: {string.Join(", ", dropdownOptions)}", LogLevel.Warning);
+                _loggingService.Log($"Using {dropdownOptions.Count} unique values from column {Config.DropdownColumn} as dropdown options: {string.Join(", ", dropdownOptions)}", LogLevel.Warning);
             }
             else
             {
                 throw new InvalidOperationException(
-                    "No dropdown options found in main file column G. " +
-                    "Please ensure column G has data validation with dropdown options, " +
+                    $"No dropdown options found in main file column {Config.DropdownColumn}. " +
+                    "Please ensure the dropdown column has data validation with dropdown options, " +
                     "or has at least some values that can be used as options.");
             }
         }
 
-        // Load reference files
-        _loggingService.Log("Loading reference file A...");
-        UpdateLogDisplay();
-        using var refAWorkbook = new XLWorkbook(ReferenceAPath);
-        var refAWorksheet = refAWorkbook.Worksheet(1);
-        if (refAWorksheet == null)
+        // Validate dropdown count if specified
+        if (Config.ExpectedDropdownCount.HasValue && dropdownOptions.Count != Config.ExpectedDropdownCount.Value)
         {
-            throw new InvalidOperationException("Reference file A does not have a first worksheet.");
+            _loggingService.Log($"WARNING: Expected {Config.ExpectedDropdownCount.Value} dropdown options, but found {dropdownOptions.Count}.", LogLevel.Warning);
         }
 
-        _loggingService.Log("Loading reference file B...");
-        UpdateLogDisplay();
-        using var refBWorkbook = new XLWorkbook(ReferenceBPath);
-        var refBWorksheet = refBWorkbook.Worksheet(1);
-        if (refBWorksheet == null)
+        // Load reference files using configuration
+        var referenceFileMatches = new List<(HashSet<string> EanSet, string DropdownOption, int Priority)>();
+        var referenceFilePaths = new List<string>();
+
+        foreach (var refFileVm in ReferenceFileConfigs.OrderBy(r => r.Config.Priority))
         {
-            throw new InvalidOperationException("Reference file B does not have a first worksheet.");
+            if (string.IsNullOrWhiteSpace(refFileVm.FilePath))
+            {
+                // Try legacy paths for backward compatibility
+                if (refFileVm.Config.Priority == 1 && !string.IsNullOrWhiteSpace(ReferenceAPath))
+                {
+                    refFileVm.FilePath = ReferenceAPath;
+                    refFileVm.Config.FilePath = ReferenceAPath;
+                }
+                else if (refFileVm.Config.Priority == 2 && !string.IsNullOrWhiteSpace(ReferenceBPath))
+                {
+                    refFileVm.FilePath = ReferenceBPath;
+                    refFileVm.Config.FilePath = ReferenceBPath;
+                }
+                else
+                {
+                    _loggingService.Log($"WARNING: Reference file {refFileVm.DisplayName} has no file path. Skipping.", LogLevel.Warning);
+                    continue;
+                }
+            }
+
+            if (!File.Exists(refFileVm.FilePath))
+            {
+                _loggingService.Log($"WARNING: Reference file {refFileVm.DisplayName} does not exist: {refFileVm.FilePath}. Skipping.", LogLevel.Warning);
+                continue;
+            }
+
+            _loggingService.Log($"Loading {refFileVm.DisplayName}...");
+            UpdateLogDisplay();
+
+            HashSet<string> refEans;
+
+            // Check file type and process accordingly
+            var fileType = refFileVm.Config.FileType ?? "Excel";
+            var extension = Path.GetExtension(refFileVm.FilePath).ToLowerInvariant();
+            
+            if (extension == ".pptx" || fileType == "PowerPoint")
+            {
+                // Process PowerPoint file
+                var selectedSlides = refFileVm.Config.SelectedSlides ?? new List<int>();
+                if (selectedSlides.Count == 0)
+                {
+                    _loggingService.Log($"Reading EANs from {refFileVm.DisplayName} (all slides)...");
+                }
+                else
+                {
+                    _loggingService.Log($"Reading EANs from {refFileVm.DisplayName} (slides: {string.Join(", ", selectedSlides)})...");
+                }
+                UpdateLogDisplay();
+
+                refEans = _powerPointReader.ReadEansFromPowerPoint(
+                    refFileVm.FilePath,
+                    selectedSlides,
+                    Config.MinEanDigits,
+                    Config.MaxEanDigits,
+                    Config.AllowNonNumericEans);
+
+                _loggingService.Log($"Found {refEans.Count} EANs in {refFileVm.DisplayName}.");
+            }
+            else
+            {
+                // Process Excel file
+                using var refWorkbook = new XLWorkbook(refFileVm.FilePath);
+                IXLWorksheet refWorksheet;
+                
+                if (!string.IsNullOrWhiteSpace(refFileVm.Config.WorksheetName))
+                {
+                    refWorksheet = refWorkbook.Worksheet(refFileVm.Config.WorksheetName);
+                    if (refWorksheet == null)
+                    {
+                        throw new InvalidOperationException($"{refFileVm.DisplayName} does not have a worksheet named '{refFileVm.Config.WorksheetName}'.");
+                    }
+                }
+                else
+                {
+                    refWorksheet = refWorkbook.Worksheet(refFileVm.Config.WorksheetIndex);
+                    if (refWorksheet == null)
+                    {
+                        throw new InvalidOperationException($"{refFileVm.DisplayName} does not have a worksheet at index {refFileVm.Config.WorksheetIndex}.");
+                    }
+                }
+
+                var refEanColumn = ProcessingConfiguration.ColumnLetterToNumber(refFileVm.Config.EanColumn);
+                _loggingService.Log($"Reading EANs from {refFileVm.DisplayName} (column {refFileVm.Config.EanColumn}, starting at row {refFileVm.Config.StartRow})...");
+                UpdateLogDisplay();
+                
+                refEans = _excelReader.ReadAllEansFromColumn(
+                    refWorksheet, 
+                    refEanColumn, 
+                    refFileVm.Config.StartRow, 
+                    Config.MinEanDigits, 
+                    Config.MaxEanDigits, 
+                    Config.AllowNonNumericEans);
+                
+                _loggingService.Log($"Found {refEans.Count} EANs in {refFileVm.DisplayName}.");
+            }
+            referenceFilePaths.Add(refFileVm.FilePath);
+            
+            // Determine dropdown option for this reference file
+            string dropdownOption = refFileVm.Config.MappedDropdownOption ?? string.Empty;
+            
+            if (string.IsNullOrWhiteSpace(dropdownOption) && Config.AutoMapFilenames)
+            {
+                // Try to auto-map
+                var autoMappings = _matchingService.MapFilenamesToDropdownsFlexible(
+                    new List<string> { refFileVm.FilePath },
+                    dropdownOptions,
+                    Config.ManualDropdownMappings);
+                
+                if (autoMappings.TryGetValue(refFileVm.FilePath, out var mapped))
+                {
+                    dropdownOption = mapped;
+                }
+            }
+            else if (Config.ManualDropdownMappings.TryGetValue(refFileVm.FilePath, out var manualMapped))
+            {
+                dropdownOption = manualMapped;
+            }
+
+            if (string.IsNullOrWhiteSpace(dropdownOption))
+            {
+                _loggingService.Log($"WARNING: Could not determine dropdown option for {refFileVm.DisplayName}. It will be skipped.", LogLevel.Warning);
+                continue;
+            }
+
+            _loggingService.Log($"Mapped {refFileVm.DisplayName} to dropdown option: {dropdownOption}");
+            referenceFileMatches.Add((refEans, dropdownOption, refFileVm.Config.Priority));
         }
 
-        // Read EANs from reference files
-        _loggingService.Log("Reading EANs from reference file A (column C)...");
-        UpdateLogDisplay();
-        var refAEans = _excelReader.ReadAllEansFromColumnC(refAWorksheet);
-        _loggingService.Log($"Found {refAEans.Count} EANs in reference file A.");
+        if (referenceFileMatches.Count == 0)
+        {
+            throw new InvalidOperationException("No valid reference files found. Please configure at least one reference file.");
+        }
 
-        _loggingService.Log("Reading EANs from reference file B (column C)...");
-        UpdateLogDisplay();
-        var refBEans = _excelReader.ReadAllEansFromColumnC(refBWorksheet);
-        _loggingService.Log($"Found {refBEans.Count} EANs in reference file B.");
-
-        // Map filenames to dropdown options
-        _loggingService.Log("Mapping filenames to dropdown options...");
-        UpdateLogDisplay();
-        var mapping = _matchingService.MapFilenamesToDropdowns(ReferenceAPath, ReferenceBPath, dropdownOptions);
+        // Determine no-match option
+        var usedOptions = referenceFileMatches.Select(m => m.DropdownOption).ToList();
+        var noMatchOption = dropdownOptions.FirstOrDefault(o => !usedOptions.Contains(o, StringComparer.OrdinalIgnoreCase));
         
-        if (!mapping.IsValid)
+        if (string.IsNullOrWhiteSpace(noMatchOption) && dropdownOptions.Count > referenceFileMatches.Count)
         {
-            var errorMsg = "Failed to map filenames to dropdown options:\n" + string.Join("\n", mapping.ValidationErrors);
-            throw new InvalidOperationException(errorMsg);
+            // Use the first unused option
+            noMatchOption = dropdownOptions.FirstOrDefault(o => !usedOptions.Any(u => u.Equals(o, StringComparison.OrdinalIgnoreCase)));
+        }
+        
+        if (string.IsNullOrWhiteSpace(noMatchOption))
+        {
+            _loggingService.Log("WARNING: Could not determine no-match option. Using first dropdown option.", LogLevel.Warning);
+            noMatchOption = dropdownOptions.FirstOrDefault() ?? "No Match";
         }
 
-        _loggingService.Log($"Mapped reference A to: {mapping.ReferenceAOption}");
-        _loggingService.Log($"Mapped reference B to: {mapping.ReferenceBOption}");
-        _loggingService.Log($"No-match option: {mapping.NoMatchOption}");
+        _loggingService.Log($"No-match option: {noMatchOption}");
         UpdateLogDisplay();
 
         // Debug: Log sample EANs for comparison
@@ -527,22 +891,20 @@ public partial class MainViewModel : ObservableObject
             var sampleMainEans = mainEans.Take(5).Select(kvp => kvp.Value).ToList();
             _loggingService.Log($"Sample main file EANs (first 5): {string.Join(", ", sampleMainEans)}");
         }
-        if (refAEans.Count > 0)
+        foreach (var (eanSet, dropdownOption, priority) in referenceFileMatches)
         {
-            var sampleRefAEans = refAEans.Take(5).ToList();
-            _loggingService.Log($"Sample reference A EANs (first 5): {string.Join(", ", sampleRefAEans)}");
-        }
-        if (refBEans.Count > 0)
-        {
-            var sampleRefBEans = refBEans.Take(5).ToList();
-            _loggingService.Log($"Sample reference B EANs (first 5): {string.Join(", ", sampleRefBEans)}");
+            if (eanSet.Count > 0)
+            {
+                var sampleEans = eanSet.Take(5).ToList();
+                _loggingService.Log($"Sample reference file (priority {priority}) EANs (first 5): {string.Join(", ", sampleEans)}");
+            }
         }
         UpdateLogDisplay();
 
-        // Match EANs
+        // Match EANs using flexible matching
         _loggingService.Log("Matching EANs...");
         UpdateLogDisplay();
-        var rowStatuses = _matchingService.MatchEans(mainEans, refAEans, refBEans, mapping);
+        var rowStatuses = _matchingService.MatchEansFlexible(mainEans, referenceFileMatches, noMatchOption);
 
         // Count matches
         var summary = new RunSummary
@@ -552,32 +914,85 @@ public partial class MainViewModel : ObservableObject
 
         foreach (var status in rowStatuses.Values)
         {
-            if (status == mapping.ReferenceAOption)
-                summary.MatchesInReferenceA++;
-            else if (status == mapping.ReferenceBOption)
-                summary.MatchesInReferenceB++;
+            if (usedOptions.Contains(status, StringComparer.OrdinalIgnoreCase))
+            {
+                // Find which reference file this matches
+                var matchIndex = usedOptions.FindIndex(o => o.Equals(status, StringComparison.OrdinalIgnoreCase));
+                if (matchIndex == 0)
+                    summary.MatchesInReferenceA++;
+                else if (matchIndex == 1)
+                    summary.MatchesInReferenceB++;
+            }
             else
+            {
                 summary.NoMatches++;
+            }
         }
 
         _loggingService.Log($"Processing complete:");
         _loggingService.Log($"  Total EANs processed: {summary.TotalEansProcessed}");
-        _loggingService.Log($"  Matches in Reference A: {summary.MatchesInReferenceA}");
-        _loggingService.Log($"  Matches in Reference B: {summary.MatchesInReferenceB}");
+        _loggingService.Log($"  Matches in reference files: {summary.MatchesInReferenceA + summary.MatchesInReferenceB}");
         _loggingService.Log($"  No matches: {summary.NoMatches}");
         UpdateLogDisplay();
 
         // Write statuses to main file
-        _loggingService.Log("Writing statuses to main file...");
+        var statusColumn = Config.GetStatusColumnNumber();
+        _loggingService.Log($"Writing statuses to main file (column {Config.StatusColumn})...");
         UpdateLogDisplay();
-        _excelWriter.WriteStatuses(mainWorksheet, rowStatuses);
+        _excelWriter.WriteStatuses(mainWorksheet, rowStatuses, statusColumn);
 
         // Save main file safely
         _loggingService.Log("Saving main file...");
         UpdateLogDisplay();
-        _excelWriter.SafeOverwrite(mainWorkbook, MainFilePath);
-        _loggingService.Log("Main file saved successfully.");
+        var processedFilePath = _excelWriter.SaveToProcessedFolder(mainWorkbook, MainFilePath);
+        _loggingService.Log($"Processed file saved to: {processedFilePath}");
+        _loggingService.Log($"Original file moved to: original folder");
+        _loggingService.Log("File processing completed successfully.");
         UpdateLogDisplay();
+    }
+
+    private List<(string FilePath, string DisplayName)> GetReferenceFilesFromConfig()
+    {
+        var referenceFiles = new List<(string FilePath, string DisplayName)>();
+        
+        // Get reference files from the configuration collection
+        foreach (var refFileVm in ReferenceFileConfigs.OrderBy(r => r.Config.Priority))
+        {
+            var filePath = refFileVm.FilePath;
+            
+            // Try legacy paths for backward compatibility if file path is empty
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                if (refFileVm.Config.Priority == 1 && !string.IsNullOrWhiteSpace(ReferenceAPath))
+                {
+                    filePath = ReferenceAPath;
+                }
+                else if (refFileVm.Config.Priority == 2 && !string.IsNullOrWhiteSpace(ReferenceBPath))
+                {
+                    filePath = ReferenceBPath;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+            {
+                referenceFiles.Add((filePath, refFileVm.DisplayName));
+            }
+        }
+
+        // Fallback to legacy reference files if no files in collection
+        if (referenceFiles.Count == 0)
+        {
+            if (!string.IsNullOrWhiteSpace(ReferenceAPath) && File.Exists(ReferenceAPath))
+            {
+                referenceFiles.Add((ReferenceAPath, "Reference File A"));
+            }
+            if (!string.IsNullOrWhiteSpace(ReferenceBPath) && File.Exists(ReferenceBPath))
+            {
+                referenceFiles.Add((ReferenceBPath, "Reference File B"));
+            }
+        }
+
+        return referenceFiles;
     }
 
     private void UpdateLogDisplay()
@@ -596,5 +1011,173 @@ public partial class MainViewModel : ObservableObject
     {
         public bool IsValid { get; set; }
         public List<string> Errors { get; set; } = new();
+    }
+
+    // Configuration management methods
+    [RelayCommand]
+    private void AddReferenceFile()
+    {
+        var priority = ReferenceFileConfigs.Count + 1;
+        var newFile = new ReferenceFileViewModel($"Reference File {GetNextReferenceFileLetter()}", priority);
+        ReferenceFileConfigs.Add(newFile);
+    }
+
+    public void RemoveReferenceFile(ReferenceFileViewModel viewModel)
+    {
+        ReferenceFileConfigs.Remove(viewModel);
+        // Renumber priorities
+        for (int i = 0; i < ReferenceFileConfigs.Count; i++)
+        {
+            ReferenceFileConfigs[i].Config.Priority = i + 1;
+        }
+    }
+
+    private string GetNextReferenceFileLetter()
+    {
+        if (ReferenceFileConfigs.Count == 0) return "A";
+        var lastChar = (char)('A' + ReferenceFileConfigs.Count);
+        return lastChar.ToString();
+    }
+
+    [RelayCommand]
+    private void SaveConfig()
+    {
+        try
+        {
+            SyncConfigFromUI();
+            _configService.SaveConfiguration(Config);
+            _loggingService.Log("Configuration saved successfully.", LogLevel.Info);
+            UpdateLogDisplay();
+            MessageBox.Show("Configuration saved successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _loggingService.Log($"Failed to save configuration: {ex.Message}", LogLevel.Error);
+            UpdateLogDisplay();
+            MessageBox.Show($"Failed to save configuration:\n\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    [RelayCommand]
+    private void LoadConfig()
+    {
+        try
+        {
+            var loadedConfig = _configService.LoadConfiguration();
+            if (loadedConfig != null)
+            {
+                Config = loadedConfig;
+                UpdateReferenceFilesFromConfig();
+                UpdateUIFromConfig();
+                _loggingService.Log("Configuration loaded successfully.", LogLevel.Info);
+                UpdateLogDisplay();
+                MessageBox.Show("Configuration loaded successfully!", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                MessageBox.Show("No saved configuration found.", "Info", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            _loggingService.Log($"Failed to load configuration: {ex.Message}", LogLevel.Error);
+            UpdateLogDisplay();
+            MessageBox.Show($"Failed to load configuration:\n\n{ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    [RelayCommand]
+    private void ResetConfig()
+    {
+        var result = MessageBox.Show("Reset configuration to defaults? This will clear all current settings.", 
+            "Confirm Reset", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        
+        if (result == MessageBoxResult.Yes)
+        {
+            Config = _configService.GetDefaultConfiguration();
+            ReferenceFileConfigs.Clear();
+            ReferenceFileConfigs.Add(new ReferenceFileViewModel("Reference File A", 1));
+            ReferenceFileConfigs.Add(new ReferenceFileViewModel("Reference File B", 2));
+            ManualMappings.Clear();
+            UpdateUIFromConfig();
+            _loggingService.Log("Configuration reset to defaults.", LogLevel.Info);
+            UpdateLogDisplay();
+        }
+    }
+
+    private void SyncConfigFromUI()
+    {
+        // Sync reference files
+        Config.ReferenceFiles.Clear();
+        foreach (var refFileVm in ReferenceFileConfigs)
+        {
+            refFileVm.Config.FilePath = refFileVm.FilePath;
+            Config.ReferenceFiles.Add(refFileVm.Config);
+        }
+
+        // Sync manual mappings
+        Config.ManualDropdownMappings.Clear();
+        foreach (var mapping in ManualMappings)
+        {
+            if (!string.IsNullOrWhiteSpace(mapping.FilePath) && !string.IsNullOrWhiteSpace(mapping.DropdownOption))
+            {
+                Config.ManualDropdownMappings[mapping.FilePath] = mapping.DropdownOption;
+            }
+        }
+
+        // Sync expected dropdown count
+        if (int.TryParse(ExpectedDropdownCountText, out int count))
+        {
+            Config.ExpectedDropdownCount = count;
+        }
+        else
+        {
+            Config.ExpectedDropdownCount = null;
+        }
+    }
+
+    private void UpdateReferenceFilesFromConfig()
+    {
+        ReferenceFileConfigs.Clear();
+        if (Config.ReferenceFiles.Count > 0)
+        {
+            foreach (var refConfig in Config.ReferenceFiles.OrderBy(r => r.Priority))
+            {
+                var vm = new ReferenceFileViewModel($"Reference File {GetReferenceFileLetter(refConfig.Priority)}", refConfig.Priority)
+                {
+                    FilePath = refConfig.FilePath,
+                    Config = refConfig
+                };
+                ReferenceFileConfigs.Add(vm);
+            }
+        }
+        else
+        {
+            // Default to 2 reference files
+            ReferenceFileConfigs.Add(new ReferenceFileViewModel("Reference File A", 1));
+            ReferenceFileConfigs.Add(new ReferenceFileViewModel("Reference File B", 2));
+        }
+    }
+
+    private void UpdateUIFromConfig()
+    {
+        ExpectedDropdownCountText = Config.ExpectedDropdownCount?.ToString() ?? string.Empty;
+        
+        ManualMappings.Clear();
+        foreach (var mapping in Config.ManualDropdownMappings)
+        {
+            ManualMappings.Add(new ManualMappingViewModel
+            {
+                FilePath = mapping.Key,
+                DropdownOption = mapping.Value
+            });
+        }
+    }
+
+    private string GetReferenceFileLetter(int priority)
+    {
+        if (priority <= 0) return "A";
+        var letter = (char)('A' + (priority - 1));
+        return letter.ToString();
     }
 }

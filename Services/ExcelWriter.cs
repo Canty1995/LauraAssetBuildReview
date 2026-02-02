@@ -10,7 +10,19 @@ public class ExcelWriter
     /// </summary>
     /// <param name="worksheet">The worksheet to write to</param>
     /// <param name="rowStatuses">Dictionary mapping row number (1-based) to status value</param>
+    [Obsolete("Use WriteStatuses with column number parameter")]
     public void WriteStatuses(IXLWorksheet worksheet, Dictionary<int, string> rowStatuses)
+    {
+        WriteStatuses(worksheet, rowStatuses, 7);
+    }
+
+    /// <summary>
+    /// Writes status values to a specified column for the specified rows.
+    /// </summary>
+    /// <param name="worksheet">The worksheet to write to</param>
+    /// <param name="rowStatuses">Dictionary mapping row number (1-based) to status value</param>
+    /// <param name="columnNumber">Column number (1-based) to write to</param>
+    public void WriteStatuses(IXLWorksheet worksheet, Dictionary<int, string> rowStatuses, int columnNumber)
     {
         foreach (var kvp in rowStatuses)
         {
@@ -21,7 +33,7 @@ public class ExcelWriter
             var cleanedStatus = CleanStatusValue(status);
             
             // Set the cell value directly (not as a formula or string with quotes)
-            worksheet.Cell(row, 7).Value = cleanedStatus;
+            worksheet.Cell(row, columnNumber).Value = cleanedStatus;
         }
     }
 
@@ -54,38 +66,79 @@ public class ExcelWriter
     /// </summary>
     /// <param name="workbook">The workbook to save</param>
     /// <param name="originalPath">Path to the original file</param>
+    [Obsolete("Use SaveToProcessedFolder instead")]
     public void SafeOverwrite(XLWorkbook workbook, string originalPath)
     {
-        var directory = Path.GetDirectoryName(originalPath) ?? string.Empty;
-        var fileName = Path.GetFileNameWithoutExtension(originalPath);
-        var extension = Path.GetExtension(originalPath);
-        var tempPath = Path.Combine(directory, $"{fileName}_temp_{Guid.NewGuid()}{extension}");
+        SaveToProcessedFolder(workbook, originalPath);
+    }
+
+    /// <summary>
+    /// Saves the processed file to a "processed" folder and moves the original to an "original" folder.
+    /// Both folders are created in the application root directory.
+    /// </summary>
+    /// <param name="workbook">The workbook to save</param>
+    /// <param name="originalPath">Path to the original file</param>
+    /// <returns>Path to the saved processed file</returns>
+    public string SaveToProcessedFolder(XLWorkbook workbook, string originalPath)
+    {
+        // Get the application root directory (where the executable is running from)
+        var appRoot = AppDomain.CurrentDomain.BaseDirectory;
+        var processedFolder = Path.Combine(appRoot, "processed");
+        var originalFolder = Path.Combine(appRoot, "original");
+
+        // Create folders if they don't exist
+        if (!Directory.Exists(processedFolder))
+        {
+            Directory.CreateDirectory(processedFolder);
+        }
+        if (!Directory.Exists(originalFolder))
+        {
+            Directory.CreateDirectory(originalFolder);
+        }
+
+        var fileName = Path.GetFileName(originalPath);
+        var processedFilePath = Path.Combine(processedFolder, fileName);
+        var originalFilePath = Path.Combine(originalFolder, fileName);
+
+        // Handle duplicate filenames by adding a timestamp
+        if (File.Exists(processedFilePath))
+        {
+            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(originalPath);
+            var extension = Path.GetExtension(originalPath);
+            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            processedFilePath = Path.Combine(processedFolder, $"{fileNameWithoutExt}_{timestamp}{extension}");
+        }
+
+        // Handle duplicate filenames in original folder
+        if (File.Exists(originalFilePath))
+        {
+            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(originalPath);
+            var extension = Path.GetExtension(originalPath);
+            var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            originalFilePath = Path.Combine(originalFolder, $"{fileNameWithoutExt}_{timestamp}{extension}");
+        }
 
         try
         {
-            // Save to temporary file
-            // Use default save options to preserve all workbook parts including styles
-            workbook.SaveAs(tempPath);
+            // Save the processed workbook to the processed folder
+            workbook.SaveAs(processedFilePath);
 
-            // Ensure the file is fully written
-            // The SaveAs method should handle flushing, but we'll verify the file exists
-            if (!File.Exists(tempPath))
+            // Verify the processed file was created
+            if (!File.Exists(processedFilePath))
             {
-                throw new IOException($"Temporary file was not created: {tempPath}");
+                throw new IOException($"Processed file was not created: {processedFilePath}");
             }
 
-            // Verify the temp file is not empty
-            var tempFileInfo = new FileInfo(tempPath);
-            if (tempFileInfo.Length == 0)
+            var processedFileInfo = new FileInfo(processedFilePath);
+            if (processedFileInfo.Length == 0)
             {
-                throw new IOException($"Temporary file is empty: {tempPath}");
+                throw new IOException($"Processed file is empty: {processedFilePath}");
             }
 
             // Wait a bit to ensure file system has flushed
             System.Threading.Thread.Sleep(100);
 
-            // Replace original file
-            // Delete the original first to avoid issues with file locks
+            // Move the original file to the original folder
             if (File.Exists(originalPath))
             {
                 // Try to remove read-only attribute if present
@@ -94,41 +147,35 @@ public class ExcelWriter
                 {
                     fileInfo.IsReadOnly = false;
                 }
-                
-                // Delete the original file
-                File.Delete(originalPath);
-                
-                // Wait a bit after deletion
-                System.Threading.Thread.Sleep(100);
+
+                // Move the original file to the original folder
+                File.Move(originalPath, originalFilePath);
+            }
+            else
+            {
+                // If original file doesn't exist (shouldn't happen, but handle gracefully)
+                throw new FileNotFoundException($"Original file not found: {originalPath}");
             }
 
-            // Move temp file to original location (more atomic than copy)
-            File.Move(tempPath, originalPath);
-            
-            // Verify the final file exists and is not empty
-            var finalFileInfo = new FileInfo(originalPath);
-            if (!finalFileInfo.Exists || finalFileInfo.Length == 0)
-            {
-                throw new IOException($"Final file verification failed: {originalPath}");
-            }
+            return processedFilePath;
         }
         catch (Exception ex)
         {
-            // Clean up temp file if it exists
-            if (File.Exists(tempPath))
+            // Clean up processed file if it exists
+            if (File.Exists(processedFilePath))
             {
                 try
                 {
-                    File.Delete(tempPath);
+                    File.Delete(processedFilePath);
                 }
                 catch
                 {
                     // Ignore cleanup errors
                 }
             }
-            
+
             // Re-throw with more context
-            throw new IOException($"Failed to save workbook to {originalPath}: {ex.Message}", ex);
+            throw new IOException($"Failed to save processed file: {ex.Message}", ex);
         }
     }
 }

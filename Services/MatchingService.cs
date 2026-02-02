@@ -10,6 +10,7 @@ public class MatchingService
     /// Maps reference filenames to dropdown options using case-insensitive matching.
     /// Extracts key identifiers (like KING codes) from filenames and matches them to dropdown options.
     /// </summary>
+    [Obsolete("Use MapFilenamesToDropdownsFlexible for flexible file count")]
     public MappingResult MapFilenamesToDropdowns(string referenceAPath, string referenceBPath, List<string> dropdownOptions)
     {
         var result = new MappingResult();
@@ -147,6 +148,89 @@ public class MatchingService
     }
 
     /// <summary>
+    /// Maps multiple reference filenames to dropdown options flexibly.
+    /// Supports any number of reference files and dropdown options.
+    /// </summary>
+    public Dictionary<string, string> MapFilenamesToDropdownsFlexible(
+        List<string> referenceFilePaths,
+        List<string> dropdownOptions,
+        Dictionary<string, string>? manualMappings = null)
+    {
+        var mappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        
+        // Start with manual mappings if provided
+        if (manualMappings != null)
+        {
+            foreach (var mapping in manualMappings)
+            {
+                mappings[mapping.Key] = mapping.Value;
+            }
+        }
+
+        // For each reference file, try to auto-map if not manually mapped
+        foreach (var filePath in referenceFilePaths)
+        {
+            var fileName = Path.GetFileNameWithoutExtension(filePath);
+            
+            // Skip if already manually mapped
+            if (mappings.ContainsKey(filePath) || mappings.ContainsKey(fileName))
+                continue;
+
+            // Try to find a matching dropdown option
+            var matchedOption = FindMatchingDropdownOption(fileName, dropdownOptions, mappings.Values);
+            if (matchedOption != null)
+            {
+                mappings[filePath] = matchedOption;
+            }
+        }
+
+        return mappings;
+    }
+
+    /// <summary>
+    /// Finds a dropdown option that matches the given filename.
+    /// </summary>
+    private string? FindMatchingDropdownOption(string fileName, List<string> dropdownOptions, ICollection<string> alreadyMapped)
+    {
+        var fileNameLower = fileName.ToLowerInvariant();
+        var fileNameIdentifiers = ExtractIdentifiers(fileName);
+
+        // First pass: Exact match
+        foreach (var option in dropdownOptions)
+        {
+            if (alreadyMapped.Contains(option, StringComparer.OrdinalIgnoreCase))
+                continue;
+
+            if (option.Equals(fileName, StringComparison.OrdinalIgnoreCase))
+                return option;
+        }
+
+        // Second pass: Containment match
+        foreach (var option in dropdownOptions)
+        {
+            if (alreadyMapped.Contains(option, StringComparer.OrdinalIgnoreCase))
+                continue;
+
+            var optionLower = option.ToLowerInvariant();
+            if (optionLower.Contains(fileNameLower) || fileNameLower.Contains(optionLower))
+                return option;
+        }
+
+        // Third pass: Identifier match
+        foreach (var option in dropdownOptions)
+        {
+            if (alreadyMapped.Contains(option, StringComparer.OrdinalIgnoreCase))
+                continue;
+
+            var optionIdentifiers = ExtractIdentifiers(option);
+            if (fileNameIdentifiers.Any(id => optionIdentifiers.Contains(id, StringComparer.OrdinalIgnoreCase)))
+                return option;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Extracts key identifiers from a string (e.g., "KING01058", "KING01042").
     /// Looks for patterns like uppercase letters followed by numbers, or common code patterns.
     /// </summary>
@@ -185,6 +269,7 @@ public class MatchingService
     /// Matches EANs from the main file against reference files and returns status values for each row.
     /// Priority: Reference A → Reference B → No Match
     /// </summary>
+    [Obsolete("Use MatchEans with flexible reference files")]
     public Dictionary<int, string> MatchEans(
         Dictionary<int, string> mainEans,
         HashSet<string> refAEans,
@@ -210,6 +295,46 @@ public class MatchingService
             else
             {
                 status = mapping.NoMatchOption ?? string.Empty;
+            }
+
+            rowStatuses[row] = status;
+        }
+
+        return rowStatuses;
+    }
+
+    /// <summary>
+    /// Matches EANs from the main file against multiple reference files with priorities.
+    /// Returns status values for each row based on which reference file contains the EAN.
+    /// </summary>
+    /// <param name="mainEans">Dictionary of row number to EAN from main file</param>
+    /// <param name="referenceFileMatches">List of tuples: (EAN set, dropdown option, priority). Lower priority = checked first.</param>
+    /// <param name="noMatchOption">Option to use when EAN is not found in any reference file</param>
+    public Dictionary<int, string> MatchEansFlexible(
+        Dictionary<int, string> mainEans,
+        List<(HashSet<string> EanSet, string DropdownOption, int Priority)> referenceFileMatches,
+        string noMatchOption)
+    {
+        var rowStatuses = new Dictionary<int, string>();
+
+        // Sort reference files by priority (lower number = higher priority)
+        var sortedReferences = referenceFileMatches.OrderBy(r => r.Priority).ToList();
+
+        foreach (var kvp in mainEans)
+        {
+            var row = kvp.Key;
+            var ean = kvp.Value;
+
+            string status = noMatchOption;
+            
+            // Check each reference file in priority order
+            foreach (var (eanSet, dropdownOption, _) in sortedReferences)
+            {
+                if (eanSet.Contains(ean))
+                {
+                    status = dropdownOption;
+                    break; // Found a match, stop checking
+                }
             }
 
             rowStatuses[row] = status;
