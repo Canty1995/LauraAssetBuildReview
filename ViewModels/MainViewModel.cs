@@ -494,15 +494,23 @@ public partial class MainViewModel : ObservableObject
         var selectedSlides = new List<int>(); // For now, process all slides
         // TODO: Add UI to select slides for main PowerPoint file
         
-        var mainEansSet = _powerPointReader.ReadEansFromPowerPoint(
+        var mainEansResult = _powerPointReader.ReadEansFromPowerPointWithStats(
             MainFilePath,
             selectedSlides,
             Config.MinEanDigits,
             Config.MaxEanDigits,
             Config.AllowNonNumericEans);
         
-        var mainEansList = mainEansSet.ToList();
-        _loggingService.Log($"Found {mainEansList.Count} EANs in PowerPoint file.");
+        var mainEansList = mainEansResult.Eans.ToList();
+        _loggingService.Log($"Found {mainEansList.Count} unique EANs in PowerPoint file.");
+        
+        // Log per-slide EAN counts
+        _loggingService.Log("EAN counts per slide:");
+        foreach (var kvp in mainEansResult.EanCountsPerSlide.OrderBy(x => x.Key))
+        {
+            _loggingService.Log($"  Slide {kvp.Key}: {kvp.Value} EAN(s)");
+        }
+        UpdateLogDisplay();
 
         if (mainEansList.Count == 0)
         {
@@ -536,12 +544,22 @@ public partial class MainViewModel : ObservableObject
                 var refFileVm = ReferenceFileConfigs.FirstOrDefault(r => r.FilePath == refFilePath);
                 var refSelectedSlides = refFileVm?.Config.SelectedSlides ?? new List<int>();
                 
-                refEans = _powerPointReader.ReadEansFromPowerPoint(
+                var refEansResult = _powerPointReader.ReadEansFromPowerPointWithStats(
                     refFilePath,
                     refSelectedSlides,
                     Config.MinEanDigits,
                     Config.MaxEanDigits,
                     Config.AllowNonNumericEans);
+                
+                refEans = refEansResult.Eans;
+                
+                // Log per-slide counts for reference files
+                _loggingService.Log($"EAN counts per slide in {fileName}:");
+                foreach (var kvp in refEansResult.EanCountsPerSlide.OrderBy(x => x.Key))
+                {
+                    _loggingService.Log($"  Slide {kvp.Key}: {kvp.Value} EAN(s)");
+                }
+                UpdateLogDisplay();
             }
             else
             {
@@ -589,7 +607,12 @@ public partial class MainViewModel : ObservableObject
         UpdateLogDisplay();
         
         var outputFileName = Path.GetFileNameWithoutExtension(MainFilePath);
-        var resultPath = _resultWriter.CreateResultFile(mainEansList, eanToFiles, outputFileName);
+        var resultPath = _resultWriter.CreateResultFile(
+            mainEansList, 
+            eanToFiles, 
+            outputFileName, 
+            mainEansResult.EanCountsPerSlide,
+            mainEansResult.EansPerSlide);
         
         _loggingService.Log($"Result file created: {resultPath}");
         
@@ -782,14 +805,23 @@ public partial class MainViewModel : ObservableObject
                 }
                 UpdateLogDisplay();
 
-                refEans = _powerPointReader.ReadEansFromPowerPoint(
+                var refEansResult = _powerPointReader.ReadEansFromPowerPointWithStats(
                     refFileVm.FilePath,
                     selectedSlides,
                     Config.MinEanDigits,
                     Config.MaxEanDigits,
                     Config.AllowNonNumericEans);
 
+                refEans = refEansResult.Eans;
                 _loggingService.Log($"Found {refEans.Count} EANs in {refFileVm.DisplayName}.");
+                
+                // Log per-slide counts for reference files
+                _loggingService.Log($"EAN counts per slide in {refFileVm.DisplayName}:");
+                foreach (var kvp in refEansResult.EanCountsPerSlide.OrderBy(x => x.Key))
+                {
+                    _loggingService.Log($"  Slide {kvp.Key}: {kvp.Value} EAN(s)");
+                }
+                UpdateLogDisplay();
             }
             else
             {
