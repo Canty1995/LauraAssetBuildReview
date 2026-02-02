@@ -1,0 +1,140 @@
+﻿<Window x:Class="LauraAssetBuildReview.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:LauraAssetBuildReview"
+        xmlns:vm="clr-namespace:LauraAssetBuildReview.ViewModels"
+        mc:Ignorable="d"
+        Title="EAN Excel Matcher" Height="700" Width="900"
+        WindowStartupLocation="CenterScreen">
+    <Window.DataContext>
+        <vm:MainViewModel />
+    </Window.DataContext>
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Main File Selection -->
+        <Grid Grid.Row="0" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="Main File:" VerticalAlignment="Center" MinWidth="120"/>
+            <TextBox Grid.Column="1" Text="{Binding MainFilePath}" IsReadOnly="True" Margin="5,0" VerticalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="Browse..." Command="{Binding BrowseMainFileCommand}" MinWidth="80" Padding="10,5"/>
+        </Grid>
+
+        <!-- Reference File A Selection -->
+        <Grid Grid.Row="1" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="Reference File A:" VerticalAlignment="Center" MinWidth="120"/>
+            <TextBox Grid.Column="1" Text="{Binding ReferenceAPath}" IsReadOnly="True" Margin="5,0" VerticalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="Browse..." Command="{Binding BrowseReferenceACommand}" MinWidth="80" Padding="10,5"/>
+        </Grid>
+
+        <!-- Reference File B Selection -->
+        <Grid Grid.Row="2" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="Reference File B:" VerticalAlignment="Center" MinWidth="120"/>
+            <TextBox Grid.Column="1" Text="{Binding ReferenceBPath}" IsReadOnly="True" Margin="5,0" VerticalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="Browse..." Command="{Binding BrowseReferenceBCommand}" MinWidth="80" Padding="10,5"/>
+        </Grid>
+
+        <!-- Run Button and Status -->
+        <Grid Grid.Row="3" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Button Grid.Column="0" Content="Run" Command="{Binding RunCommand}" 
+                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                    Height="40" FontSize="16" FontWeight="Bold" Margin="0,0,10,0"/>
+            <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" VerticalAlignment="Center" 
+                       FontWeight="SemiBold" Margin="10,0,0,0"/>
+        </Grid>
+
+        <!-- Progress Indicator -->
+        <Grid Grid.Row="4" Margin="0,0,0,10" Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <ProgressBar IsIndeterminate="True" Height="20"/>
+        </Grid>
+
+        <!-- Separator -->
+        <Separator Grid.Row="5" Margin="0,10"/>
+
+        <!-- Comparison Section -->
+        <Label Grid.Row="6" Content="File Comparison (Column G):" FontWeight="Bold" FontSize="14" Margin="0,10,0,5"/>
+
+        <!-- Comparison File 1 Selection -->
+        <Grid Grid.Row="7" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="File 1 (Manual):" VerticalAlignment="Center" MinWidth="120"/>
+            <TextBox Grid.Column="1" Text="{Binding ComparisonFile1Path}" IsReadOnly="True" Margin="5,0" VerticalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="Browse..." Command="{Binding BrowseComparisonFile1Command}" MinWidth="80" Padding="10,5"/>
+        </Grid>
+
+        <!-- Comparison File 2 Selection -->
+        <Grid Grid.Row="8" Margin="0,0,0,10">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Label Grid.Column="0" Content="File 2 (Program):" VerticalAlignment="Center" MinWidth="120"/>
+            <TextBox Grid.Column="1" Text="{Binding ComparisonFile2Path}" IsReadOnly="True" Margin="5,0" VerticalContentAlignment="Center"/>
+            <Button Grid.Column="2" Content="Browse..." Command="{Binding BrowseComparisonFile2Command}" MinWidth="80" Padding="10,5"/>
+        </Grid>
+
+        <!-- Compare Button -->
+        <Button Grid.Row="9" Content="Compare Files" Command="{Binding CompareFilesCommand}" 
+                IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                Height="35" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10"/>
+
+        <!-- Log Panel Label -->
+        <Label Grid.Row="10" Content="Log Output:" FontWeight="Bold" Margin="0,0,0,5"/>
+
+        <!-- Log Output -->
+        <ScrollViewer Grid.Row="11" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+            <ListBox ItemsSource="{Binding LogMessages}" 
+                     Background="Black" 
+                     Foreground="LightGreen"
+                     FontFamily="Consolas"
+                     FontSize="11"
+                     BorderThickness="0"
+                     SelectionMode="Extended">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="Padding" Value="5,2"/>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
+        </ScrollViewer>
+    </Grid>
+</Window>
